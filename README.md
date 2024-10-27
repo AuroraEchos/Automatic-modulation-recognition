@@ -1,4 +1,3 @@
-# Automatic-modulation-recognition
 # 自动调制识别（Automatic Modulation Recognition）
 
 ## 项目简介
@@ -7,10 +6,14 @@
 
 ## 目录
 
-- [数据集](#数据集)
-- [模型架构](#模型架构)
-- [结果分析](#结果分析)
-- [环境要求](#环境要求)
+- [自动调制识别（Automatic Modulation Recognition）](#自动调制识别automatic-modulation-recognition)
+  - [项目简介](#项目简介)
+  - [目录](#目录)
+  - [数据集](#数据集)
+  - [模型架构](#模型架构)
+  - [结果分析](#结果分析)
+  - [环境要求](#环境要求)
+  - [了解更多](#了解更多)
 
 ## 数据集
 
@@ -31,10 +34,7 @@
 
 - Python 3.x
 - PyTorch
-- NumPy
-- Matplotlib
-- tqdm
 
 ## 了解更多
 
-如果想详细了解，可以移至个人博客：[www.chatlwh.com](http://www.chatlwh.com)。
+如果想详细了解，可以移至个人[博客](http://www.chatlwh.com)，这里有更加详细完整的说明。

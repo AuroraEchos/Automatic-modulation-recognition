@@ -1,3 +1,7 @@
+# Description: This file contains the class RMLDataProcessor which is used to load and process the RadioML 2016.10A dataset.
+# Date: 2024-9-20
+# Author: Wenhao Liu
+
 import pickle
 import json
 import numpy as np
