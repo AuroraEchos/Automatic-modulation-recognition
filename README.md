@@ -34,7 +34,3 @@
 
 - Python 3.x
 - PyTorch
-
-## 了解更多
-
-如果想详细了解，可以移至个人[博客](http://www.chatlwh.com)，这里有更加详细完整的说明。
