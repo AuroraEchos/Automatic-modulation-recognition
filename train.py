@@ -1,4 +1,4 @@
-# Description: This script is used to train the BiLSTM model on the RML dataset for different SNR levels.
+# Description: This script is used to train the model on the RML dataset for different SNR levels.
 # Date: 2024-9-23
 # Author: Wenhao Liu
 
