@@ -18,9 +18,9 @@ class SEBlock(nn.Module):
         se = torch.sigmoid(self.fc2(se)).view(batch, channels, 1)
         return x * se
 
-class ResidualBlockWithSE(nn.Module):
+class REBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
-        super(ResidualBlockWithSE, self).__init__()
+        super(REBlock, self).__init__()
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
         self.bn1 = nn.BatchNorm1d(out_channels)
         self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
@@ -45,11 +45,11 @@ class AMRModel(nn.Module):
         super(AMRModel, self).__init__()
 
         self.feature_extractor = nn.Sequential(
-            ResidualBlockWithSE(2, 32),
+            REBlock(2, 32),
             nn.MaxPool1d(2),
-            ResidualBlockWithSE(32, 64),
+            REBlock(32, 64),
             nn.MaxPool1d(2),
-            ResidualBlockWithSE(64, 128),
+            REBlock(64, 128),
             nn.Dropout(0.3)
         )
         self.lstm = nn.LSTM(input_size=128, hidden_size=256, num_layers=2, bidirectional=True, batch_first=True)
