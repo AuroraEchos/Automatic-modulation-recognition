@@ -9,7 +9,7 @@
    - 下载原始数据集 `RML2016.10a_dict.pkl`，并将其放入 `Dataset/` 文件夹下。
 
 2. **划分数据集**
-   - 运行 `Dataset/Data_Split.py` 脚本以完成数据预处理和划分。
+   - 运行 `Dataset/Data_Split.py` 脚本以完成数据划分。
    - 本脚本将原始数据划分为：
      - `test_data.pkl`：占比 20%，仅用于模型最终测试。
      - `train_val_data.pkl`：占比 80%，用于训练和验证阶段。
