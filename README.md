@@ -23,7 +23,7 @@
    - 运行 `train.py` 启动训练过程。
    - 程序将自动加载 `train_val_data.pkl` 和你的模型，开始训练，并将：
      - 最优模型权重保存至 `result/best_model.pth`
-     - 训练日志和中间指标保存至 `result/train_results.json`
+     - 训练日志和中间指标保存至 `result/train_result.json`
 
 5. **模型评估**
    - 运行 `test.py`，使用测试集 `test_data.pkl` 对模型进行最终评估。
