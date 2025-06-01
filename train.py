@@ -1,158 +1,261 @@
-# Description: This script is used to train the model on the RML dataset for different SNR levels.
-# Date: 2024-9-23
-# Author: Wenhao Liu
+"""
+Train a modulation recognition model on the RadioML2016.10A dataset.
 
-import os
-import json
-import argparse
-from tqdm import tqdm
-import numpy as np
+This script performs preprocessing, model training, evaluation, and result saving.
+The model is trained on IQ samples to recognize modulation types under various SNR conditions.
+
+Usage:
+    python train.py --train_data_path Dataset/train_data.pkl \
+                    --train_result_path result/train_result.json \
+                    --save_model_path result/best_model.pth \
+                    --epochs 100 --batch_size 64 --lr 1e-4
+
+Dependencies:
+    - Python 3.9+
+    - PyTorch
+    - NumPy
+    - scikit-learn
+    - tqdm
+    - logging
+    - json
+    - pickle
+
+Author: Wenhao Liu
+Date: 2025-06-01
+"""
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset
+from sklearn.model_selection import train_test_split
 
-from model import AMRModel
-from data_processor import RMLDataProcessor
-from sklearn.utils.class_weight import compute_class_weight
+import argparse
+import pickle
+import numpy as np
+import os
+import logging
+from datetime import datetime
+from tqdm import tqdm
+import json
 
-def save_results_to_json(snr, val_acc, args, save_path='results.json'):
-    results = {}
-    if os.path.exists(save_path):
-        with open(save_path, 'r') as f:
-            results = json.load(f)
-    results[f"SNR_{snr}"] = {"validation_accuracy": val_acc}
-    with open(save_path, 'w') as f:
-        json.dump(results, f, indent=4)
-    print(f"Results saved to {save_path}")
+from model import AMRModel  # Assuming AMCModel is defined in model.py
 
+class RadioMLDataProcess:
+    def __init__(self, file_path):
+        self.file_path = file_path
+ 
+    def load_data(self):
+        try:
+            with open(self.file_path, 'rb') as file:
+                return pickle.load(file, encoding='latin1')
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Dataset file not found: {self.file_path}")
+    def normalize_iq(self, iq_signals):
+        power = np.mean(np.square(iq_signals), axis=0)
+        return iq_signals / np.sqrt(power + 1e-8)
+     
+    def process(self):
+        """
+        Process the RadioML2016.10A dataset and convert IQ signals into a format suitable for model input.
+         
+        Returns:
+            all_features (np.ndarray): Processed feature array with shape (N, 2, 128)
+            all_labels (np.ndarray): Corresponding label array with shape (N,)
+            all_snr (np.ndarray): Corresponding SNR array with shape (N,)
+        """
+        raw_data = self.load_data()
+        snr = sorted(set(key[1] for key in raw_data.keys()))
+        modulation = sorted(set(key[0] for key in raw_data.keys()))
+ 
+        num_modulation = len(modulation)
+        num_snr = len(snr)
+        num_samples_per_snr = len(raw_data[(modulation[0], snr[0])])
+        total_samples = num_modulation * num_snr * num_samples_per_snr
+         
+        all_features = np.zeros((total_samples, 2, 128))
+        all_labels = np.zeros(total_samples, dtype=int)
+        all_snr = np.zeros(total_samples)
+ 
+        sample_idx = 0
+        for mod_idx, mod_type in enumerate(modulation):
+            for snr_idx, snr_type in enumerate(snr):
+                key = (mod_type, snr_type)
+                samples = np.array(raw_data[key])
+                for i in range(samples.shape[0]):
+                    iq_signal = samples[i].T
+                    normalized_signal = self.normalize_iq(iq_signal).T
+                    all_features[sample_idx] = normalized_signal
+                    all_labels[sample_idx] = mod_idx
+                    all_snr[sample_idx] = snr_type
+                    sample_idx += 1
+ 
+        return all_features, all_labels, all_snr
 
-def evaluate_model(model, data_loader, criterion, device):
-    model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-    all_labels = []
-    all_predictions = []
+class RMLDataset(Dataset):
+    def __init__(self, features, labels):
+        assert features.shape[1:] == (2, 128), f"Expected features shape (N, 2, 128), got {features.shape}"
+        self.features = torch.tensor(features, dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=torch.long)
+ 
+    def __len__(self):
+        return len(self.labels)
+ 
+    def __getitem__(self, idx):
+        return self.features[idx], self.labels[idx]
 
-    with torch.no_grad():
-        for inputs, labels in data_loader:
-            inputs, labels = to_device((inputs, labels), device)
+def setup_logging():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.path.join(base_dir, "result")
+    os.makedirs(log_dir, exist_ok=True)
 
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            total_loss += loss.item()
+    log_file = os.path.join(log_dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+ 
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
 
-            predicted = torch.argmax(outputs, dim=1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
-
-            all_labels.extend(labels.cpu().numpy())
-            all_predictions.extend(predicted.cpu().numpy())
-
-    avg_loss = total_loss / len(data_loader)
-    accuracy = 100 * correct / total
-
-    return avg_loss, accuracy, all_labels, all_predictions
-
-
-def validate_model(model, val_loader, criterion, device):
-    avg_val_loss, val_accuracy, _, _ = evaluate_model(model, val_loader, criterion, device)
-    print(f'Validation Loss: {avg_val_loss:.4f}, Validation Accuracy: {val_accuracy:.2f}%')
-    return avg_val_loss, val_accuracy
-
-
-def to_device(data, device):
-    if isinstance(data, (list, tuple)):
-        return [to_device(x, device) for x in data]
-    return data.to(device)
-
+def save_results_to_json(train_losses, val_losses, val_accs, file_path):
+    results = {
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'val_accs': val_accs
+    }
+    with open(file_path, 'w') as file:
+        json.dump(results, file, indent=4)
+    print(f"Results saved to {file_path}")
 
 def train(args):
-    device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
-    print(f"Using {device} for training")
+    logger = setup_logging()
+    logger.info("Starting training process...")
 
-    print(f"Loading RML dataset from {args.file_path}")
-    data = RMLDataProcessor(args.file_path)
+    train_val_data_path = args.train_val_data_path
+    best_model_path     = args.best_model_path
+    train_result_path   = args.train_result_path
+    batch_size          = args.batch_size
+    epochs              = args.epochs
+    lr                  = args.lr
+    patience            = args.patience
+    weight_decay        = args.weight_decay
+    scheduler_factor    = args.scheduler_factor
+    scheduler_patience  = args.scheduler_patience
 
-    best_acc_per_snr = {}
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
 
-    for snr in args.snr_level:
-        print(f"\nTraining for SNR level: {snr} dB")
+    logger.info("Loading and processing data...")
+    data_processor = RadioMLDataProcess(train_val_data_path)
+    features, labels, _ = data_processor.process()
+    logger.info(f"Features shape: {features.shape}, Labels shape: {labels.shape}")
 
-        X_train, X_val, y_train, y_val = data.prepare_data_for_model([snr], augment=True)
+    X_train, X_val, y_train, y_val = train_test_split(
+        features, labels, test_size=0.25, random_state=2025, stratify=labels
+        # Ensure the overall segmentation ratio is 6:2:2
+    )
 
-        train_dataset = TensorDataset(torch.Tensor(X_train), torch.Tensor(y_train).long())
-        val_dataset = TensorDataset(torch.Tensor(X_val), torch.Tensor(y_val).long())
+    train_dataset = RMLDataset(X_train, y_train)
+    val_dataset = RMLDataset(X_val, y_val)
+ 
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    
+    model = AMRModel().to(device)
 
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        factor=scheduler_factor,
+        patience=scheduler_patience,
+    )
 
-        model = AMRModel(args.num_classes).to(device)
+    logger.info("Start training...")
+    train_losses, val_losses, val_accs = [], [], []
+    best_acc = 0.0
+    early_stop_counter = 0
+    for epoch in range(epochs):
+        model.train()
+        train_loss = 0.0
+        total_train_samples = 0
+        train_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]", leave=False)
+ 
+        for inputs, labels in train_bar:
+            batch_size = inputs.size(0)
+            total_train_samples += batch_size
+            inputs, labels = inputs.to(device), labels.to(device)
+ 
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * batch_size
+ 
+            train_bar.set_postfix({'loss': loss.item()})
+ 
+        train_loss /= total_train_samples
+        train_losses.append(train_loss)
+ 
+        model.eval()
+        val_loss = 0.0
+        total_val_samples = 0
+        correct = 0
+        val_bar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{epochs} [Val]", leave=False)
+ 
+        with torch.no_grad():
+            for inputs, labels in val_bar:
+                batch_size = inputs.size(0)
+                total_val_samples += batch_size
+                inputs, labels = inputs.to(device), labels.to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item() * batch_size
+                _, predicted = torch.max(outputs, 1)
+                correct += (predicted == labels).sum().item()
+ 
+                val_bar.set_postfix({'loss': loss.item()})
+ 
+        val_loss /= total_val_samples
+        val_acc = correct / total_val_samples
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+ 
+        scheduler.step(val_loss)
+ 
+        logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.4f}")
+ 
+        if val_acc > best_acc:
+            best_acc = val_acc
+            torch.save(model.state_dict(), best_model_path)
+            early_stop_counter = 0
+        else:
+            early_stop_counter += 1
+            if early_stop_counter >= patience:
+                logger.info(f"Early stopping triggered after {epoch+1} epochs.")
+                break
+ 
+    save_results_to_json(train_losses, val_losses, val_accs, train_result_path)
+    logger.info("Training finished.")
 
-        class_weights = compute_class_weight('balanced', classes=np.arange(args.num_classes), y=y_train)
-        criterion = nn.CrossEntropyLoss(weight=torch.Tensor(class_weights).to(device))
 
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
-
-        best_val_acc = 0.0
-
-        for epoch in range(args.epochs):
-            model.train()
-            total_loss = 0
-
-            with tqdm(total=len(train_loader), desc=f"Epoch [{epoch + 1}/{args.epochs}]", unit="batch") as pbar:
-                for inputs, labels in train_loader:
-                    inputs, labels = to_device((inputs, labels), device)
-
-                    outputs = model(inputs)
-                    loss = criterion(outputs, labels)
-
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-
-                    total_loss += loss.item()
-                    pbar.update(1)
-                    pbar.set_postfix(loss=loss.item())
-
-            print(f'Epoch [{epoch + 1}/{args.epochs}], Loss: {total_loss / len(train_loader):.4f}')
-
-            avg_val_loss, val_acc = validate_model(model, val_loader, criterion, device)
-            scheduler.step(epoch + len(train_loader))
-
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save(model.state_dict(), f"best_model_snr_{snr}.pth")
-                print(f"New best model saved for SNR {snr} with accuracy: {best_val_acc:.2f}%")
-
-        best_acc_per_snr[snr] = best_val_acc
-        print(f"Best validation accuracy for SNR {snr}: {best_val_acc:.2f}%")
-
-        save_results_to_json(snr, best_val_acc, args)
-
-    print("\nTraining completed successfully!")
-    for snr, acc in best_acc_per_snr.items():
-        print(f"Best validation accuracy for SNR {snr}: {acc:.2f}%")
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='RML Training')
-
-    # Load parameters
-    parser.add_argument('--file_path', type=str, default='RML/RML2016.10a_dict.pkl', help='The path of the RML dataset')
-    parser.add_argument('--snr_level', type=int, nargs='+', default=[-20, -18, -16, -14, -12, -10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12, 14, 16, 18], 
-                        help='The SNR level(s) for training, currently only training [-20, -10, 0, 10, 20] one by one')
-
-    # Training parameters
-    parser.add_argument('--cuda', type=bool, default=True, help='Whether to use CUDA for training')
-    parser.add_argument('--batch_size', type=int, default=64, help='The batch size for training')
-    parser.add_argument('--num_classes', type=int, default=11, help='The number of classes')
-    parser.add_argument('--lr', type=float, default=1e-3, help='The learning rate for training')
-    parser.add_argument('--epochs', type=int, default=50, help='The number of epochs for training')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train an AMC model with RadioML dataset.")
+    parser.add_argument("--train_val_data_path", type=str, default="Dataset/train_val_data.pkl")
+    parser.add_argument("--best_model_path", type=str, default="result/best_model.pth")
+    parser.add_argument("--train_result_path", type=str, default="result/train_result.json")
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--patience", type=int, default=10)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--scheduler_factor", type=float, default=0.5)
+    parser.add_argument("--scheduler_patience", type=int, default=5)
 
     args = parser.parse_args()
+
     train(args)
